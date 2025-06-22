@@ -1,0 +1,446 @@
+"""
+Expedition Runner - Orchestrates complete dungeon expeditions for multiple parties.
+
+This is the main simulation engine that coordinates all our existing resolvers
+to run parties through dungeons simultaneously with timed event emission.
+"""
+
+import sys
+import os
+# Add the project root to the path so we can import our modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import time
+from typing import List, Dict, Optional, Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from models.character import Character, CharacterRole
+from models.party import Party
+from models.events import EventType, EventEmitter
+from simulation.dungeon_generator import DungeonGenerator, RoomType
+from simulation.combat_resolver import CombatResolver
+from simulation.trap_resolver import TrapResolver
+from simulation.treasure_resolver import TreasureResolver
+from simulation.morale_checker import MoraleChecker
+
+
+@dataclass
+class ExpeditionResult:
+    """Results of a complete expedition for a single party"""
+    guild_id: int
+    guild_name: str
+    floors_cleared: int
+    rooms_cleared: int
+    gold_found: int
+    monsters_defeated: int
+    retreated: bool
+    wiped: bool
+    start_time: datetime
+    end_time: datetime
+
+
+@dataclass
+class SimulationTick:
+    """Represents a single tick of events to emit"""
+    tick_number: int
+    timestamp: float
+    events: List[Dict] = field(default_factory=list)
+
+
+class EventEmitterWrapper:
+    """
+    Wrapper to make a simple callback function compatible with EventEmitter interface.
+    This allows combat_resolver to work with our callback-based event system.
+    """
+    def __init__(self, callback_fn):
+        self.callback = callback_fn
+        
+    def emit(self, guild_id, guild_name, event_type, description, details=None, priority="normal", tags=None):
+        """Forward to callback with correct signature"""
+        self.callback(guild_id, guild_name, event_type, description, priority, details)
+    
+    def combat_start(self, guild_id, guild_name, enemy_count, is_boss=False):
+        """Wrapper for combat start events"""
+        encounter_type = "Boss" if is_boss else "Combat"
+        self.callback(
+            guild_id, guild_name, EventType.COMBAT_START,
+            f"{encounter_type} encounter! {enemy_count} enemies appear!",
+            "high" if is_boss else "normal",
+            {'enemy_count': enemy_count, 'is_boss': is_boss}
+        )
+    
+    def character_attack(self, guild_id, guild_name, character_name, damage, critical=False):
+        """Wrapper for attack events"""
+        if critical:
+            self.callback(
+                guild_id, guild_name, EventType.ATTACK_CRITICAL,
+                f"{character_name} lands a CRITICAL HIT for {damage} damage!",
+                "high",
+                {'character': character_name, 'damage': damage, 'critical': True}
+            )
+        else:
+            self.callback(
+                guild_id, guild_name, EventType.ATTACK_HIT,
+                f"{character_name} attacks for {damage} damage",
+                "normal",
+                {'character': character_name, 'damage': damage, 'critical': False}
+            )
+    
+    def character_unconscious(self, guild_id, guild_name, character_name):
+        """Wrapper for unconscious events"""
+        self.callback(
+            guild_id, guild_name, EventType.CHARACTER_UNCONSCIOUS,
+            f"{character_name} has been knocked unconscious!",
+            "high",
+            {'character': character_name}
+        )
+    
+    def character_dies(self, guild_id, guild_name, character_name):
+        """Wrapper for death events"""
+        self.callback(
+            guild_id, guild_name, EventType.CHARACTER_DIES,
+            f"💀 {character_name} has DIED! They will not return...",
+            "critical",
+            {'character': character_name}
+        )
+
+
+class ExpeditionRunner:
+    """
+    Orchestrates expeditions for multiple parties through a dungeon.
+    
+    Simply coordinates our existing resolvers and manages timing/synchronization.
+    All actual game mechanics are handled by the specialized resolvers.
+    """
+    
+    def __init__(self, 
+                 seed: int,
+                 emit_event_callback: Optional[Callable] = None,
+                 tick_duration: float = 2.0,
+                 max_floors: int = 3):
+        """
+        Initialize the expedition runner.
+        
+        Args:
+            seed: Random seed for dungeon generation
+            emit_event_callback: Optional callback function for events (for backwards compatibility)
+            tick_duration: Seconds between event ticks (default 2.0)
+            max_floors: Maximum floors before expedition ends (default 3)
+        """
+        self.seed = seed
+        self.tick_duration = tick_duration
+        self.max_floors = max_floors
+        
+        # Only dungeon generation uses the seed - everything else should be random!
+        import random
+        
+        # Create event handling based on whether callback was provided
+        if emit_event_callback:
+            self.emit_event = emit_event_callback
+            # Create wrapper for combat resolver
+            self.event_emitter_wrapper = EventEmitterWrapper(emit_event_callback)
+        else:
+            # Use default EventEmitter
+            self.event_emitter = EventEmitter()
+            self.emit_event = self.event_emitter.emit
+            self.event_emitter_wrapper = self.event_emitter
+        
+        # Our existing resolvers handle all the mechanics
+        # ONLY dungeon generator gets the seed - so all parties face same dungeon
+        self.dungeon_generator = DungeonGenerator(seed)
+        
+        # All other resolvers use unseeded random - so outcomes vary each run!
+        # Each gets its own RNG instance for true randomness
+        self.combat_resolver = CombatResolver(self.event_emitter_wrapper, random.Random())
+        self.trap_resolver = TrapResolver(random.Random(), self.emit_event)
+        self.treasure_resolver = TreasureResolver(random.Random(), self.emit_event)
+        self.morale_checker = MoraleChecker(random.Random(), self.emit_event)
+        
+        # Track ticks for synchronized viewing
+        self.current_tick = 0
+        self.tick_events: List[SimulationTick] = []
+    
+    def run_expedition(self, parties: List[Party]) -> List[ExpeditionResult]:
+        """
+        Run a complete expedition for multiple parties.
+        
+        Args:
+            parties: List of Party objects to run through the dungeon
+            
+        Returns:
+            List of ExpeditionResult objects, one per party
+        """
+        start_time = datetime.now()
+        
+        # Reset state
+        self.current_tick = 0
+        self.tick_events = []
+        
+        # Prepare parties
+        active_parties = []
+        for party in parties:
+            party.reset_for_new_expedition()
+            active_parties.append(party)
+        
+        # Announce expedition start
+        self._emit_expedition_starts(active_parties)
+        self._add_tick()
+        
+        # Process floors
+        for floor_number in range(1, self.max_floors + 1):
+            if not active_parties:
+                break
+                
+            # Generate floor (same for all parties)
+            rooms = self.dungeon_generator.generate_floor(floor_number)
+            
+            # Announce floor entry
+            self._emit_floor_entries(active_parties, floor_number, len(rooms))
+            self._add_tick()
+            
+            # Process each room
+            for room_index, room in enumerate(rooms):
+                if not active_parties:
+                    break
+                    
+                # Room entry
+                self._emit_room_entries(active_parties, room, floor_number, room_index + 1)
+                self._add_tick()
+                
+                # Process room contents for each party
+                for party in active_parties[:]:  # Copy to allow removal
+                    if party.is_party_wiped():
+                        self._handle_party_wipe(party, floor_number, room_index + 1)
+                        active_parties.remove(party)
+                        continue
+                    
+                    # Healing fountain is special
+                    if room.room_type == RoomType.HEALING_FOUNTAIN:
+                        self._process_healing_fountain(party)
+                    else:
+                        # Handle trap component
+                        if room.room_type in [RoomType.TRAP, RoomType.BOTH]:
+                            self.trap_resolver.resolve_trap(party, floor_number)
+                            self._add_tick()
+                            
+                            # Check if party wiped from trap
+                            if party.is_party_wiped():
+                                self._handle_party_wipe(party, floor_number, room_index + 1)
+                                active_parties.remove(party)
+                                continue
+                        
+                        # Handle combat component
+                        if room.room_type in [RoomType.COMBAT, RoomType.BOTH, RoomType.BOSS]:
+                            self.combat_resolver.resolve_combat(party, room)
+                            self._add_tick()
+                            
+                            # Check if party wiped from combat
+                            if party.is_party_wiped():
+                                self._handle_party_wipe(party, floor_number, room_index + 1)
+                                active_parties.remove(party)
+                                continue
+                        
+                        # Handle treasure (only if party survived to search)
+                        if room.room_type != RoomType.HEALING_FOUNTAIN and not party.is_party_wiped():
+                            self.treasure_resolver.resolve_treasure(
+                                party, floor_number, room.is_boss_room
+                            )
+                            self._add_tick()
+                    
+                    # Room complete - check morale (only if party survived)
+                    if not party.is_party_wiped():
+                        party.complete_room()
+                        if not self._check_party_morale(party, floor_number, is_last_room=(room_index == len(rooms) - 1)):
+                            active_parties.remove(party)
+                
+                self._add_tick()  # Pacing tick between rooms
+            
+            # Floor complete for surviving parties
+            for party in active_parties:
+                party.complete_floor()
+                
+            # Floor completion morale check (with disadvantage)
+            for party in active_parties[:]:
+                morale_result = self.morale_checker.check_morale(party, is_floor_completion=True)
+                if not morale_result.continues_expedition:
+                    active_parties.remove(party)
+            
+            self._add_tick()
+        
+        # Generate results
+        end_time = datetime.now()
+        results = []
+        for party in parties:
+            results.append(ExpeditionResult(
+                guild_id=party.guild_id,
+                guild_name=party.guild_name,
+                floors_cleared=party.floors_cleared,
+                rooms_cleared=party.rooms_cleared,
+                gold_found=party.gold_found,
+                monsters_defeated=party.monsters_defeated,
+                retreated=party.retreated,
+                wiped=party.is_party_wiped(),
+                start_time=start_time,
+                end_time=end_time
+            ))
+        
+        return results
+    
+    def _emit_expedition_starts(self, parties: List[Party]):
+        """Emit expedition start events for all parties"""
+        for party in parties:
+            self.emit_event(
+                party.guild_id, party.guild_name, EventType.EXPEDITION_START,
+                f"The {party.guild_name} begin their expedition!",
+                priority="high",
+                details={'party_size': len(party.alive_members())}
+            )
+    
+    def _emit_floor_entries(self, parties: List[Party], floor_number: int, room_count: int):
+        """Emit floor entry events for all parties"""
+        for party in parties:
+            self.emit_event(
+                party.guild_id, party.guild_name, EventType.FLOOR_ENTER,
+                f"Descending to floor {floor_number} ({room_count} rooms await...)",
+                details={'floor': floor_number, 'rooms': room_count}
+            )
+    
+    def _emit_room_entries(self, parties: List[Party], room, floor_number: int, room_number: int):
+        """Emit room entry events for all parties"""
+        room_desc = self._describe_room(room, room_number)
+        for party in parties:
+            self.emit_event(
+                party.guild_id, party.guild_name, EventType.ROOM_ENTER,
+                f"Entering {room_desc}",
+                details={'floor': floor_number, 'room': room_number, 'type': room.room_type.value}
+            )
+    
+    def _describe_room(self, room, room_number: int) -> str:
+        """Generate descriptive text for a room"""
+        descriptions = {
+            RoomType.COMBAT: f"a monster lair (Room {room_number})",
+            RoomType.TRAP: f"a trapped corridor (Room {room_number})",
+            RoomType.BOTH: f"a dangerous chamber (Room {room_number})",
+            RoomType.BOSS: f"a boss chamber (Room {room_number})",
+            RoomType.HEALING_FOUNTAIN: f"a healing sanctuary (Room {room_number})"
+        }
+        return descriptions.get(room.room_type, f"Room {room_number}")
+    
+    def _process_healing_fountain(self, party: Party):
+        """Process healing fountain room"""
+        total_healed = 0
+        for member in party.members:
+            if member.is_alive and member.current_hp < member.max_hp:
+                healed = member.heal(member.max_hp - member.current_hp)
+                total_healed += healed
+        
+        self.emit_event(
+            party.guild_id, party.guild_name, EventType.ROOM_ENTER,
+            f"A healing fountain! The party restores {total_healed} HP",
+            details={'healed': total_healed}
+        )
+    
+    def _check_party_morale(self, party: Party, floor_number: int, is_last_room: bool) -> bool:
+        """
+        Check if party continues after room completion.
+        
+        Returns:
+            True if party continues, False if they retreat
+        """
+        if party.is_party_wiped():
+            return False
+            
+        # Don't check morale on last room of floor (will check at floor completion)
+        if is_last_room:
+            return True
+            
+        morale_result = self.morale_checker.check_morale(party, is_floor_completion=False)
+        return morale_result.continues_expedition
+    
+    def _handle_party_wipe(self, party: Party, floor_number: int, room_number: int):
+        """Handle when a party is completely wiped out"""
+        self.emit_event(
+            party.guild_id, party.guild_name, EventType.EXPEDITION_WIPE,
+            f"DISASTER! The {party.guild_name} have been lost to the dungeon!",
+            priority="critical",
+            details={'final_floor': floor_number, 'final_room': room_number}
+        )
+    
+    def _add_tick(self):
+        """Add a tick marker for event synchronization"""
+        tick = SimulationTick(
+            tick_number=self.current_tick,
+            timestamp=time.time() + (self.current_tick * self.tick_duration),
+            events=[]  # Events are already emitted by resolvers
+        )
+        self.tick_events.append(tick)
+        self.current_tick += 1
+    
+    def emit_tick_schedule(self, real_time: bool = True):
+        """
+        Emit events with proper timing for viewing.
+        
+        Args:
+            real_time: If True, wait between ticks. If False, emit immediately.
+        """
+        for tick in self.tick_events:
+            if real_time and tick.tick_number > 0:
+                time.sleep(self.tick_duration)
+            # In real implementation, this would coordinate with websockets
+            print(f"[Tick {tick.tick_number:03d}]")
+
+
+# Quick test
+if __name__ == "__main__":
+    from models.character import Character
+    from models.party import Party
+    
+    def print_event(guild_id: int, guild_name: str, event_type: EventType, 
+                    description: str, priority: str = "normal", details: dict = None):
+        """Simple event printer for testing"""
+        print(f"[{event_type.value}] {guild_name}: {description}")
+    
+    # Create a proper test party with real names and all stats
+    party = Party(
+        guild_id=1,
+        guild_name="Brave Companions",
+        members=[
+            Character(name="Aldric", role=CharacterRole.STRIKER, guild_id=1, 
+                     might=15, grit=12, wit=8, luck=10),
+            Character(name="Lyra", role=CharacterRole.BURGLAR, guild_id=1,
+                     might=9, grit=10, wit=11, luck=15),
+            Character(name="Elara", role=CharacterRole.SUPPORT, guild_id=1,
+                     might=8, grit=11, wit=15, luck=12),
+            Character(name="Magnus", role=CharacterRole.CONTROLLER, guild_id=1,
+                     might=9, grit=10, wit=14, luck=13)
+        ]
+    )
+    
+    # Run expedition with consistent dungeon seed
+    dungeon_seed = 12345
+    runner = ExpeditionRunner(
+        seed=dungeon_seed,
+        emit_event_callback=print_event,
+        tick_duration=0.1  # Fast for testing
+    )
+    
+    print(f"=== DUNGEON SEED: {dungeon_seed} ===")
+    print("Running same dungeon twice to show different outcomes:\n")
+    
+    # Run 1
+    print("=== RUN 1 ===")
+    results1 = runner.run_expedition([party])
+    
+    # Reset party for run 2
+    party.reset_for_new_expedition()
+    
+    # Run 2 - same dungeon, different outcomes!
+    print("\n=== RUN 2 ===")
+    results2 = runner.run_expedition([party])
+    
+    print("\n=== COMPARING RESULTS ===")
+    for i, (r1, r2) in enumerate(zip(results1, results2)):
+        print(f"\nRun 1: Floors={r1.floors_cleared}, Rooms={r1.rooms_cleared}, Gold={r1.gold_found}")
+        print(f"Run 2: Floors={r2.floors_cleared}, Rooms={r2.rooms_cleared}, Gold={r2.gold_found}")
+        print("(Same dungeon layout, different outcomes!)")

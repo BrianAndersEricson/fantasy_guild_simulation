@@ -87,25 +87,26 @@ class CombatResolver:
     def create_enemies_for_room(self, room: Room) -> List[Enemy]:
         """
         Create enemies based on room parameters.
-        
-        Uses the room's enemy_count and difficulty_level to generate
-        appropriate enemies for the encounter.
-        
+    
+        For boss rooms: First enemy is the boss, rest are minions.
+    
         Args:
             room: Room containing enemy parameters
-            
+        
         Returns:
             List of Enemy objects for this encounter
         """
         enemies = []
         floor_level = room.difficulty_level
-        
-        for i in range(room.enemy_count):
-            enemy = self._create_single_enemy(floor_level, room.is_boss_room, i + 1)
-            enemies.append(enemy)
-        
-        return enemies
     
+        for i in range(room.enemy_count):
+            # In boss rooms, only the first enemy is the actual boss
+            is_this_enemy_boss = room.is_boss_room and i == 0
+            enemy = self._create_single_enemy(floor_level, is_this_enemy_boss, i + 1)
+            enemies.append(enemy)
+    
+        return enemies
+
     def _create_single_enemy(self, floor_level: int, is_boss: bool, enemy_number: int) -> Enemy:
         """
         Create a single enemy with stats based on floor level.
