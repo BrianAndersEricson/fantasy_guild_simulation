@@ -196,6 +196,14 @@ class Character:
             
         return self.current_hp - old_hp
     
+    def get_ac(self) -> int:
+        """
+        Calculate character's Armor Class.
+        
+        AC = 10 + grit (representing toughness and defensive ability)
+        """
+        return 10 + self.grit
+    
     def get_stat(self, stat_name: str) -> int:
         """
         Get a stat value by name.
@@ -243,7 +251,14 @@ class Character:
             return f"{self.name} ({self.role.value}) [DEAD]"
         
         consciousness = "Conscious" if self.is_conscious else "Unconscious"
-        spells_info = f", {len(self.disabled_spells)}/{self.spell_slots} spells" if self.spell_slots > 0 else ""
+        
+        # Show available/total spells if character has spell slots
+        if self.spell_slots > 0:
+            disabled_count = len(self.disabled_spells)
+            available_spells = self.spell_slots - disabled_count
+            spells_info = f", {available_spells}/{self.spell_slots} spells"
+        else:
+            spells_info = ""
         
         return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{consciousness}]{spells_info}"
 
