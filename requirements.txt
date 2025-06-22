@@ -1,0 +1,7 @@
+flask==2.3.3
+flask-socketio==5.3.6
+flask-cors==4.0.0
+python-socketio==5.9.0
+apscheduler==3.10.4
+python-dotenv==1.0.0
+pytest==7.4.3
