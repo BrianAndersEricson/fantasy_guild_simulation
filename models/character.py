@@ -6,6 +6,7 @@ This is the foundation of our simulation - every action revolves around
 these characters and their stats.
 """
 
+import random
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -54,26 +55,66 @@ class Character:
     luck: int = 10
     
     # === Current Status (changes during expedition) ===
-    current_hp: int = 20
-    max_hp: int = 20
-    is_alive: bool = True
-    is_available: bool = True  # False if recovering from previous expedition
+    current_hp: int = 0  # Will be set to max_hp in __post_init__
+    max_hp: int = 0      # Calculated from role + grit + die roll
+    is_alive: bool = True           # False if character is permanently dead
+    is_conscious: bool = True       # False if knocked unconscious (can be revived)
+    is_available: bool = True       # False if recovering from previous expedition
+    
+    # === Death Testing ===
+    death_test_failures: int = 0    # How many death tests have been failed
+    
+    # === Spell System ===
+    spell_slots: int = 0            # Number of spells this character can know
     
     # === Expedition Tracking ===
     disabled_spells: List[str] = None  # Spells disabled by critical failures
+    times_downed: int = 0  # How many times character has been downed (affects morale)
     
     def __post_init__(self):
-        """Initialize mutable defaults after dataclass creation"""
+        """Initialize calculated values and mutable defaults"""
         if self.disabled_spells is None:
             self.disabled_spells = []
+        
+        # Calculate max HP based on role and grit
+        self.max_hp = self._calculate_max_hp()
+        self.current_hp = self.max_hp
+        
+        # Calculate spell slots based on role and wit
+        self.spell_slots = self._calculate_spell_slots()
+    
+    def _calculate_max_hp(self) -> int:
+        """Calculate maximum HP based on role and grit stat"""
+        base_hp = self.grit
+        
+        if self.role == CharacterRole.STRIKER:
+            # Tough fighters: grit + 1d10
+            hp_roll = random.randint(1, 10)
+        elif self.role == CharacterRole.BURGLAR:
+            # Nimble but fragile: grit + 1d8
+            hp_roll = random.randint(1, 8)
+        else:  # SUPPORT or CONTROLLER
+            # Squishy casters: grit + 1d6
+            hp_roll = random.randint(1, 6)
+        
+        return base_hp + hp_roll
+    
+    def _calculate_spell_slots(self) -> int:
+        """Calculate number of spell slots based on role and wit"""
+        if self.role in [CharacterRole.SUPPORT, CharacterRole.CONTROLLER]:
+            # Casters get 1 spell slot per 3 wit (rounded down)
+            return self.wit // 3
+        else:
+            # Strikers and Burglars don't get spells
+            return 0
     
     def take_damage(self, damage: int) -> bool:
         """
-        Apply damage to character.
+        Apply damage to character and handle death testing.
         
-        This is called during combat and trap resolution.
-        When HP reaches 0, the character is "downed" but not dead -
-        they can be revived by healing or recover between expeditions.
+        When a character reaches 0 HP, they become unconscious and must
+        make death tests. They need to succeed 2 out of 3 rolls (>10 on d20)
+        to survive. Failure means permanent death.
         
         Args:
             damage: Amount of damage to take (cannot be negative)
@@ -87,17 +128,52 @@ class Character:
         self.current_hp = max(0, self.current_hp - damage)
         
         # Check if character was just downed
-        if self.current_hp <= 0 and self.is_alive:
-            self.is_alive = False
-            return True  # Character was just downed this turn
+        if self.current_hp <= 0 and self.is_conscious:
+            self.is_conscious = False
+            self.times_downed += 1
             
-        return False  # Character was already down or survived
+            # Perform death test (3 rolls, need 2+ successes)
+            if not self._death_test():
+                self.is_alive = False
+                return True  # Character died
+            
+            return True  # Character was downed but survived death test
+            
+        return False  # Character was already down or survived damage
+    
+    def _death_test(self) -> bool:
+        """
+        Perform death test when character is downed.
+        
+        Roll 3d20, need 2+ rolls above 10 to survive.
+        
+        Returns:
+            True if character survives, False if they die
+        """
+        successes = 0
+        rolls = []
+        
+        for _ in range(3):
+            roll = random.randint(1, 20)
+            rolls.append(roll)
+            if roll > 10:
+                successes += 1
+        
+        survived = successes >= 2
+        
+        if not survived:
+            self.death_test_failures += 1
+        
+        # Note: In a real implementation, we'd emit an event here
+        # showing the death test results for dramatic tension
+        
+        return survived
     
     def heal(self, amount: int) -> int:
         """
         Heal character (cannot exceed max HP).
         
-        This can revive downed characters and restore them to the fight.
+        This can revive unconscious characters but cannot bring back the dead.
         
         Args:
             amount: Amount to heal (cannot be negative)
@@ -105,15 +181,18 @@ class Character:
         Returns:
             Actual amount healed
         """
+        if not self.is_alive:
+            return 0  # Cannot heal the dead
+            
         if amount < 0:
             amount = 0
             
         old_hp = self.current_hp
         self.current_hp = min(self.max_hp, self.current_hp + amount)
         
-        # If healed from 0 HP, character is revived
+        # If healed from 0 HP, character regains consciousness
         if old_hp == 0 and self.current_hp > 0:
-            self.is_alive = True
+            self.is_conscious = True
             
         return self.current_hp - old_hp
     
@@ -147,16 +226,26 @@ class Character:
         
         Called between expeditions to restore HP and potentially
         recover disabled spells (based on recovery rolls).
+        Note: times_downed persists as psychological trauma.
+        Dead characters cannot be reset.
         """
+        if not self.is_alive:
+            return  # Cannot reset dead characters
+            
         self.current_hp = self.max_hp
-        self.is_alive = True
+        self.is_conscious = True
         # Note: disabled_spells persist and require recovery rolls
+        # Note: times_downed persists between expeditions
     
     def __str__(self):
         """String representation for logging and debugging"""
-        status = "Alive" if self.is_alive else "Downed"
-        spells = f", {len(self.disabled_spells)} spells disabled" if self.disabled_spells else ""
-        return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{status}]{spells}"
+        if not self.is_alive:
+            return f"{self.name} ({self.role.value}) [DEAD]"
+        
+        consciousness = "Conscious" if self.is_conscious else "Unconscious"
+        spells_info = f", {len(self.disabled_spells)}/{self.spell_slots} spells" if self.spell_slots > 0 else ""
+        
+        return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{consciousness}]{spells_info}"
 
 
 # === Test the model ===
@@ -170,7 +259,9 @@ if __name__ == "__main__":
         role=CharacterRole.STRIKER,
         guild_id=1,
         might=12,  # Strikers are strong
-        grit=11    # Decent toughness
+        grit=11,   # Decent toughness
+        wit=8,     # Lower magic ability
+        luck=9     # Average luck
     )
     
     print("1. Created character:")
