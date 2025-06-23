@@ -21,6 +21,15 @@ source venv/bin/activate
 
 # Install Dependencies
 pip install -r requirements.txt
+
+# Running the simulation
+python scheduler/expedition_scheduler.py
+
+# Resetting the simulation
+python database/reset_database.py
+
+# Checking DB Status
+python database/reset_database.py --status
 ```
 
 Fantasy Guild Manager — Complete Game Loop with All Mechanics (so far)
