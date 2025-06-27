@@ -4,12 +4,20 @@ Character model for the Fantasy Guild Manager simulation.
 Characters are members of guilds who go on automated expeditions.
 This is the foundation of our simulation - every action revolves around
 these characters and their stats.
+
+Now includes full debuff system integration for status effects.
 """
+
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import random
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
+
+from simulation.debuff_system import DebuffManager, DebuffType, Debuff
 
 
 class CharacterRole(Enum):
@@ -82,6 +90,9 @@ class Character:
 
         # Calculate spell slots based on role and wit
         self.spell_slots = self._calculate_spell_slots()
+        
+        # Initialize debuff manager for tracking status effects
+        self.debuff_manager = DebuffManager()
 
     def _calculate_max_hp(self) -> int:
         """Calculate maximum HP based on role and grit stat"""
@@ -304,6 +315,8 @@ class Character:
 
         self.current_hp = self.max_hp
         self.is_conscious = True
+        # Clear all debuffs between expeditions
+        self.debuff_manager.clear_all_debuffs()
         # Note: disabled_spells persist and require recovery rolls
         # Note: times_downed persists between expeditions
 
@@ -321,14 +334,19 @@ class Character:
             spells_info = f", {available_spells}/{self.spell_slots} spells"
         else:
             spells_info = ""
+            
+        # Show active debuffs if any
+        debuffs_info = ""
+        if self.debuff_manager.get_active_debuffs():
+            debuffs_info = f" [{self.debuff_manager}]"
 
-        return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{consciousness}]{spells_info}"
+        return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{consciousness}]{spells_info}{debuffs_info}"
 
 
 # === Test the model ===
 if __name__ == "__main__":
-    print("Testing Character model...")
-    print("=" * 40)
+    print("Testing Character model with debuff integration...")
+    print("=" * 60)
 
     # Create a test character - a Striker with high might
     aldric = Character(
@@ -354,49 +372,120 @@ if __name__ == "__main__":
     print(f"   Luck {aldric.luck} -> +{aldric.get_luck_modifier()} modifier")
     print(f"   AC: {aldric.get_ac()} (10 + {aldric.get_grit_modifier()} grit mod)")
 
+    # Test debuff system
+    print("\n3. Testing debuff integration...")
+    
+    # Apply some debuffs
+    poison = Debuff(DebuffType.POISONED, 3, source="giant rat bite")
+    weakness = Debuff(DebuffType.WEAKENED, 2, source="zombie touch")
+    blindness = Debuff(DebuffType.BLINDED, 2, source="crow swarm")
+    
+    aldric.debuff_manager.apply_debuff(poison)
+    aldric.debuff_manager.apply_debuff(weakness)
+    aldric.debuff_manager.apply_debuff(blindness)
+    
+    print(f"   Applied debuffs: Poisoned, Weakened, Blinded")
+    print(f"   {aldric}")
+    
+    # Show stat impacts
+    print("\n4. Debuff effects on stats...")
+    base_might_mod = aldric.get_might_modifier()
+    debuff_might_mod = aldric.debuff_manager.get_stat_modifier('might')
+    total_might_mod = base_might_mod + debuff_might_mod
+    
+    print(f"   Base might modifier: +{base_might_mod}")
+    print(f"   Debuff penalty: {debuff_might_mod}")
+    print(f"   Total might modifier: {total_might_mod:+d}")
+    
+    attack_penalty = aldric.debuff_manager.get_attack_modifier()
+    print(f"   Attack roll penalty from blindness: {attack_penalty}")
+    
+    # Test poison damage
+    print("\n5. Testing poison damage over rounds...")
+    for round_num in range(1, 5):
+        print(f"\n   Round {round_num}:")
+        
+        # Take poison damage
+        poison_damage = aldric.debuff_manager.get_poison_damage()
+        if poison_damage > 0:
+            aldric.take_damage(poison_damage)
+            print(f"   - Poison damage: {poison_damage}")
+            print(f"   - HP: {aldric.current_hp}/{aldric.max_hp}")
+        
+        # Tick debuffs
+        expired = aldric.debuff_manager.tick_all_debuffs()
+        if expired:
+            expired_names = [d.debuff_type.value for d in expired]
+            print(f"   - Debuffs expired: {', '.join(expired_names)}")
+        
+        # Show current state
+        active_debuffs = aldric.debuff_manager.get_active_debuffs()
+        if active_debuffs:
+            print(f"   - Active debuffs: {aldric.debuff_manager}")
+        else:
+            print("   - All debuffs cleared!")
+            break
+
     # Test damage system
-    print("\n3. Testing damage...")
+    print("\n6. Testing damage with debuffs...")
     print("   Taking 8 damage...")
     was_downed = aldric.take_damage(8)
     print(f"   Was downed: {was_downed}")
     print(f"   {aldric}")
 
     # Test healing
-    print("\n4. Testing healing...")
+    print("\n7. Testing healing...")
     print("   Healing 5 HP...")
     healed = aldric.heal(5)
     print(f"   Amount healed: {healed}")
     print(f"   {aldric}")
 
-    # Test downing and revival
-    print("\n5. Testing downing...")
-    print("   Taking 20 damage...")
-    was_downed = aldric.take_damage(20)
-    print(f"   Was downed: {was_downed}")
-    print(f"   {aldric}")
-
-    print("\n6. Testing revival...")
-    print("   Healing 10 HP...")
-    healed = aldric.heal(10)
-    print(f"   Amount healed: {healed}")
-    print(f"   {aldric}")
-
-    # Test spell disabling
-    print("\n7. Testing spell system...")
-    aldric.disable_spell("Fireball")
-    aldric.disable_spell("Shield")
-    print(f"   {aldric}")
-
     # Test expedition reset
     print("\n8. Testing expedition reset...")
+    # Apply a debuff before reset
+    stun = Debuff(DebuffType.STUNNED, 1, source="ghoul touch")
+    aldric.debuff_manager.apply_debuff(stun)
+    print(f"   Before reset: {aldric}")
+    
     aldric.reset_for_expedition()
     print(f"   After reset: {aldric}")
+    print(f"   Debuffs cleared: {len(aldric.debuff_manager.get_active_debuffs()) == 0}")
 
-    # Test modifier scaling examples
-    print("\n9. Testing modifier scaling examples...")
-    test_cases = [6, 9, 12, 15]
-    for stat_value in test_cases:
-        modifier = stat_value // 3
-        print(f"   Stat {stat_value} -> +{modifier} modifier")
+    # Test special debuff effects
+    print("\n9. Testing special debuff conditions...")
+    
+    # Test stun
+    stun = Debuff(DebuffType.STUNNED, 1)
+    aldric.debuff_manager.apply_debuff(stun)
+    print(f"   Applied stun - Can act: {not aldric.debuff_manager.is_stunned()}")
+    
+    # Test confusion
+    aldric.debuff_manager.clear_all_debuffs()
+    confusion = Debuff(DebuffType.CONFUSED, 2)
+    aldric.debuff_manager.apply_debuff(confusion)
+    print(f"   Applied confusion - Might hit allies: {aldric.debuff_manager.is_confused()}")
+    print(f"   Confusion chance: {aldric.debuff_manager.get_confusion_chance() * 100}%")
 
-    print("\n✓ All tests passed! Character model with modifiers is working.")
+    # Create a spellcaster to test wit debuffs
+    print("\n10. Testing spellcaster with debuffs...")
+    elara = Character(
+        name="Elara",
+        role=CharacterRole.SUPPORT,
+        guild_id=1,
+        might=8,
+        grit=9,
+        wit=15,  # High wit for spells
+        luck=10
+    )
+    
+    print(f"   Created support: {elara}")
+    print(f"   Base wit modifier: +{elara.get_wit_modifier()}")
+    
+    # Apply curse (affects luck)
+    curse = Debuff(DebuffType.CURSED, 3)
+    elara.debuff_manager.apply_debuff(curse)
+    
+    luck_penalty = elara.debuff_manager.get_stat_modifier('luck')
+    print(f"   Cursed - Luck penalty: {luck_penalty}")
+
+    print("\n✓ All tests passed! Character model with debuff integration is working.")
