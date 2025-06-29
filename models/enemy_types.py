@@ -387,25 +387,3 @@ BOSS_MODIFIERS = [
 ]
 
 
-if __name__ == "__main__":
-    """Test enemy type definitions"""
-    print("Fantasy Guild Manager - Enemy Types")
-    print("=" * 60)
-    
-    # Test each tier
-    for tier in EnemyTier:
-        print(f"\n{tier.name} (Floors {(tier.value-1)*2+1}-{tier.value*2}):")
-        enemies = ENEMIES_BY_TIER[tier]
-        
-        for enemy in enemies:
-            print(f"\n  {enemy.name}")
-            print(f"    {enemy.description}")
-            print(f"    HP: {enemy.get_hp_formula(tier.value * 2)}")
-            print(f"    AC: {enemy.get_ac_formula(tier.value * 2)}")
-            print(f"    Damage: {enemy.get_damage_formula(tier.value * 2)}")
-            if enemy.special_ability != SpecialAbility.NONE:
-                print(f"    Special: {enemy.special_ability.value} on {enemy.special_trigger}+ (d4)")
-    
-    print("\n\nBoss Modifiers:")
-    for mod in BOSS_MODIFIERS:
-        print(f"  - {mod.boss_type.value}: {mod.description}")

@@ -149,6 +149,8 @@ class Enemy:
         
         Returns actual amount healed.
         """
+        if self.current_hp <= 0:
+            return 0
         old_hp = self.current_hp
         self.current_hp = min(self.max_hp, self.current_hp + amount)
         return self.current_hp - old_hp
@@ -270,46 +272,3 @@ def create_encounter(floor: int, enemy_count: int, is_boss_room: bool,
             enemies.append(enemy)
     
     return enemies
-
-
-# === Test the enemy system ===
-if __name__ == "__main__":
-    print("Testing Enemy System...")
-    print("=" * 60)
-    
-    rng = random.Random(12345)
-    
-    # Test creating enemies for different floors
-    test_floors = [1, 3, 5, 7, 9]
-    
-    for floor in test_floors:
-        print(f"\n=== FLOOR {floor} ===")
-        
-        # Regular encounter
-        print("\nRegular Encounter (3 enemies):")
-        enemies = create_encounter(floor, 3, False, rng)
-        for enemy in enemies:
-            print(f"  {enemy}")
-        
-        # Boss encounter
-        print("\nBoss Encounter (1 boss + 2 minions):")
-        boss_enemies = create_encounter(floor, 3, True, rng)
-        for enemy in boss_enemies:
-            print(f"  {enemy}")
-    
-    # Test status effects
-    print("\n=== STATUS EFFECT TEST ===")
-    test_enemy = enemies[0]
-    print(f"Starting: {test_enemy}")
-    
-    test_enemy.add_status_effect(SpecialAbility.POISON, 3)
-    test_enemy.add_status_effect(SpecialAbility.SLOW, 2)
-    print(f"After effects: {test_enemy}")
-    
-    test_enemy.tick_status_effects()
-    print(f"After 1 tick: {test_enemy}")
-    
-    test_enemy.tick_status_effects()
-    print(f"After 2 ticks: {test_enemy}")
-    
-    print("\n✓ Enemy system is working!")
