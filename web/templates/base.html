@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Fantasy Guild Manager{% endblock %}</title>
+    
+    <!-- Google Fonts for FF-style text -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Press+Start+2P&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    
+    <!-- Base styles with FF-inspired theme -->
+    <style>
+        :root {
+            /* FF-inspired color palette */
+            --ff-blue: #1a237e;
+            --ff-blue-light: #3949ab;
+            --ff-blue-dark: #0d1450;
+            --ff-gold: #ffd700;
+            --ff-silver: #c0c0c0;
+            --ff-red: #d32f2f;
+            --ff-green: #388e3c;
+            --menu-bg: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
+            --window-bg: rgba(13, 20, 80, 0.95);
+            --border-color: #ffd700;
+            --text-light: #ffffff;
+            --text-dark: #0a0a0a;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: #000;
+            color: var(--text-light);
+            min-height: 100vh;
+            background-image: 
+                linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)),
+                url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080"><rect fill="%23000" width="1920" height="1080"/><rect fill="%231a237e" width="20" height="20" x="100" y="100" opacity="0.3"/><rect fill="%233949ab" width="20" height="20" x="300" y="200" opacity="0.3"/><rect fill="%231a237e" width="20" height="20" x="500" y="150" opacity="0.3"/><rect fill="%233949ab" width="20" height="20" x="700" y="300" opacity="0.3"/><rect fill="%231a237e" width="20" height="20" x="900" y="250" opacity="0.3"/></svg>');
+            background-size: cover;
+        }
+        
+        /* FF-style window containers */
+        .ff-window {
+            background: var(--window-bg);
+            border: 3px solid var(--border-color);
+            border-radius: 15px;
+            box-shadow: 
+                0 0 20px rgba(255, 215, 0, 0.3),
+                inset 0 0 20px rgba(255, 215, 0, 0.1);
+            padding: 20px;
+            margin: 20px;
+            position: relative;
+        }
+        
+        .ff-window::before {
+            content: '';
+            position: absolute;
+            top: -3px;
+            left: -3px;
+            right: -3px;
+            bottom: -3px;
+            background: linear-gradient(45deg, var(--ff-gold), var(--ff-silver), var(--ff-gold));
+            border-radius: 15px;
+            z-index: -1;
+            opacity: 0.5;
+        }
+        
+        /* Navigation menu */
+        nav {
+            background: var(--menu-bg);
+            border-bottom: 3px solid var(--ff-gold);
+            padding: 0;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        
+        .nav-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+        }
+        
+        .nav-brand {
+            font-family: 'Cinzel', serif;
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--ff-gold);
+            text-decoration: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            padding: 15px 0;
+        }
+        
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 0;
+        }
+        
+        .nav-links a {
+            display: block;
+            padding: 20px 30px;
+            color: var(--text-light);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            position: relative;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .nav-links a:hover {
+            background: rgba(255, 215, 0, 0.1);
+            color: var(--ff-gold);
+        }
+        
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            width: 0;
+            height: 3px;
+            background: var(--ff-gold);
+            transform: translateX(-50%);
+            transition: width 0.3s ease;
+        }
+        
+        .nav-links a:hover::after {
+            width: 80%;
+        }
+        
+        /* Main content container */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* FF-style headers */
+        h1, h2, h3 {
+            font-family: 'Cinzel', serif;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            font-size: 36px;
+            color: var(--ff-gold);
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            font-size: 28px;
+            color: var(--ff-gold);
+            border-bottom: 2px solid var(--ff-gold);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        h3 {
+            font-size: 22px;
+            color: var(--ff-silver);
+        }
+        
+        /* FF-style buttons */
+        .ff-button {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 12px;
+            padding: 15px 30px;
+            background: linear-gradient(135deg, var(--ff-blue) 0%, var(--ff-blue-light) 100%);
+            color: var(--text-light);
+            border: 2px solid var(--ff-gold);
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        
+        .ff-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 6px 20px rgba(0,0,0,0.4),
+                0 0 10px rgba(255, 215, 0, 0.5);
+        }
+        
+        .ff-button:active {
+            transform: translateY(0);
+        }
+        
+        /* Status indicators */
+        .status-alive { color: var(--ff-green); }
+        .status-dead { color: var(--ff-red); }
+        .status-retreated { color: #ff9800; }
+        .status-victorious { color: var(--ff-gold); }
+        
+        /* Info boxes */
+        .info-box {
+            background: rgba(255, 215, 0, 0.1);
+            border: 1px solid var(--ff-gold);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        
+        /* Tables with FF style */
+        .ff-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 20px 0;
+            background: rgba(0, 0, 0, 0.3);
+            border: 2px solid var(--ff-gold);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .ff-table th {
+            background: var(--menu-bg);
+            color: var(--ff-gold);
+            padding: 15px;
+            text-align: left;
+            font-family: 'Cinzel', serif;
+            font-weight: 600;
+            border-bottom: 2px solid var(--ff-gold);
+        }
+        
+        .ff-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+        }
+        
+        .ff-table tr:hover {
+            background: rgba(255, 215, 0, 0.05);
+        }
+        
+        .ff-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Alert messages */
+        .alert {
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 10px;
+            border: 2px solid;
+            font-weight: 500;
+        }
+        
+        .alert-success {
+            background: rgba(56, 142, 60, 0.2);
+            border-color: var(--ff-green);
+            color: #81c784;
+        }
+        
+        .alert-error {
+            background: rgba(211, 47, 47, 0.2);
+            border-color: var(--ff-red);
+            color: #ff8a80;
+        }
+        
+        .alert-info {
+            background: rgba(25, 118, 210, 0.2);
+            border-color: var(--ff-blue-light);
+            color: #90caf9;
+        }
+        
+        /* Loading animation */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 215, 0, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--ff-gold);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .nav-container {
+                flex-direction: column;
+                padding: 0;
+            }
+            
+            .nav-links {
+                width: 100%;
+                flex-direction: column;
+            }
+            
+            .nav-links a {
+                padding: 15px 20px;
+                border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+            }
+            
+            h1 { font-size: 28px; }
+            h2 { font-size: 22px; }
+            h3 { font-size: 18px; }
+            
+            .ff-window {
+                margin: 10px;
+                padding: 15px;
+            }
+        }
+    </style>
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container">
+            <a href="/" class="nav-brand">⚔️ Fantasy Guild Manager ⚔️</a>
+            <ul class="nav-links">
+                <li><a href="/">Home</a></li>
+                <li><a href="/guilds">Guilds</a></li>
+                <li><a href="/expeditions">History</a></li>
+                <li><a href="/leaderboard">Rankings</a></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <!-- Footer -->
+    <footer style="text-align: center; padding: 40px 20px; color: var(--ff-silver); font-size: 14px;">
+        <p>Fantasy Guild Manager - An automated dungeon crawling simulation</p>
+        <p style="margin-top: 10px; opacity: 0.7;">Expeditions run every hour on the hour</p>
+    </footer>
+    
+    <!-- Base JavaScript -->
+    <script>
+        // Add active state to current nav item
+        document.addEventListener('DOMContentLoaded', function() {
+            const currentPath = window.location.pathname;
+            const navLinks = document.querySelectorAll('.nav-links a');
+            
+            navLinks.forEach(link => {
+                if (link.getAttribute('href') === currentPath) {
+                    link.style.background = 'rgba(255, 215, 0, 0.1)';
+                    link.style.color = 'var(--ff-gold)';
+                }
+            });
+        });
+    </script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

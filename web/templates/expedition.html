@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}Expedition #{{ expedition.expedition_number }} - Fantasy Guild Manager{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/expedition.css') }}">
+{% endblock %}
+
+{% block content %}
+<!-- Expedition Header -->
+<div class="expedition-header">
+    <h1>Expedition #{{ expedition.expedition_number }}</h1>
+    <p class="hero-subtitle">
+        {% if expedition.status == 'running' %}
+            <span style="color: var(--ff-green);">⚡ LIVE NOW ⚡</span>
+        {% else %}
+            Replay from {{ expedition.start_time }}
+        {% endif %}
+    </p>
+</div>
+
+<!-- Playback Controls -->
+<div class="expedition-controls">
+    <button class="control-button" id="play-button" onclick="togglePlayback()">
+        <span id="play-icon">▶</span> PLAY
+    </button>
+    <button class="control-button" id="pause-button" onclick="togglePlayback()" style="display: none;">
+        <span>⏸</span> PAUSE
+    </button>
+    <button class="control-button" onclick="restartReplay()">
+        <span>⏮</span> RESTART
+    </button>
+    <div class="speed-controls">
+        <label>SPEED:</label>
+        <select id="speed-select" onchange="updatePlaybackSpeed()">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+        </select>
+    </div>
+</div>
+
+<!-- Main Viewer -->
+<div class="viewer-container">
+    <!-- Left Panel - Guild Status -->
+    <div>
+        {% for guild in guilds[:2] %}
+        <div class="guild-panel" id="guild-{{ guild.id }}-panel">
+            <h3>{{ guild.name }}</h3>
+            <div id="guild-{{ guild.id }}-party">
+                <!-- Party members will be populated by JavaScript -->
+                <div class="loading-message">
+                    <div class="loading"></div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; text-align: center;">
+                <div class="stat-item">
+                    <span class="stat-label">Gold:</span>
+                    <span class="stat-value" id="guild-{{ guild.id }}-gold">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Floors:</span>
+                    <span class="stat-value" id="guild-{{ guild.id }}-floors">0</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <!-- Center - Dungeon Display -->
+    <div class="dungeon-display">
+        <div class="floor-indicator" id="floor-indicator">
+            Floor 1
+        </div>
+        <div class="room-map" id="room-map">
+            <!-- Rooms will be generated dynamically -->
+        </div>
+        <div class="combat-display" id="combat-display">
+            <h3 style="color: var(--ff-red);">⚔️ COMBAT ⚔️</h3>
+            <div class="enemy-group" id="enemy-group">
+                <!-- Enemies will be shown during combat -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Right Panel - More Guilds -->
+    <div>
+        {% for guild in guilds[2:4] %}
+        <div class="guild-panel" id="guild-{{ guild.id }}-panel">
+            <h3>{{ guild.name }}</h3>
+            <div id="guild-{{ guild.id }}-party">
+                <!-- Party members will be populated by JavaScript -->
+                <div class="loading-message">
+                    <div class="loading"></div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; text-align: center;">
+                <div class="stat-item">
+                    <span class="stat-label">Gold:</span>
+                    <span class="stat-value" id="guild-{{ guild.id }}-gold">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Floors:</span>
+                    <span class="stat-value" id="guild-{{ guild.id }}-floors">0</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Event Log -->
+<div class="ff-window" style="height: 400px; display: flex; flex-direction: column; margin-top: 20px;">
+    <h3 style="text-align: center; margin-bottom: 15px; flex-shrink: 0;">Event Log</h3>
+    <div id="event-entries" style="flex: 1; overflow-y: auto; overflow-x: hidden; padding-right: 10px;">
+        <div class="loading-message">
+            <div class="loading"></div>
+            <p>Loading expedition data...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Pass guild data to JavaScript -->
+<script>
+    window.guildData = {
+        {% for guild in guilds %}
+        {{ guild.id }}: {
+            name: "{{ guild.name }}",
+            characters: [
+                {% for char in guild.characters %}
+                {
+                    id: {{ char.id }},
+                    name: "{{ char.name }}",
+                    role: "{{ char.role }}",
+                    max_hp: {{ char.max_hp }}
+                }{% if not loop.last %},{% endif %}
+                {% endfor %}
+            ]
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+    
+    window.expeditionData = {
+        id: {{ expedition.id }},
+        status: "{{ expedition.status }}",
+        startTime: "{{ expedition.start_time }}"
+    };
+</script>
+
+<!-- Load the expedition replay system -->
+<script src="{{ url_for('static', filename='js/expedition-replay.js') }}"></script>
+<script>
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', async function() {
+        const replay = new ExpeditionReplay({{ expedition.id }}, window.expeditionData);
+        await replay.initialize();
+        
+        // Make functions available globally for button clicks
+        window.togglePlayback = () => replay.togglePlayback();
+        window.restartReplay = () => replay.restart();
+        window.updatePlaybackSpeed = () => {
+            replay.playbackSpeed = parseFloat(document.getElementById('speed-select').value);
+            if (replay.isPlaying) {
+                replay.pause();
+                replay.play();
+            }
+        };
+    });
+</script>
+{% endblock %}

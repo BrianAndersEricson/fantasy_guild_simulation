@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+
+{% block title %}Fantasy Guild Manager - Live Expeditions{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Homepage specific styles */
+    .hero-section {
+        text-align: center;
+        padding: 40px 20px;
+        margin-bottom: 40px;
+    }
+    
+    .hero-title {
+        font-family: 'Cinzel', serif;
+        font-size: 48px;
+        color: var(--ff-gold);
+        text-shadow: 3px 3px 6px rgba(0,0,0,0.7);
+        margin-bottom: 20px;
+        animation: glow 2s ease-in-out infinite alternate;
+    }
+    
+    @keyframes glow {
+        from { text-shadow: 3px 3px 6px rgba(0,0,0,0.7), 0 0 10px rgba(255,215,0,0.5); }
+        to { text-shadow: 3px 3px 6px rgba(0,0,0,0.7), 0 0 20px rgba(255,215,0,0.8); }
+    }
+    
+    .hero-subtitle {
+        font-size: 20px;
+        color: var(--ff-silver);
+        margin-bottom: 30px;
+    }
+    
+    /* Expedition status banner */
+    .expedition-status {
+        background: linear-gradient(135deg, rgba(255,215,0,0.2) 0%, rgba(255,215,0,0.1) 100%);
+        border: 2px solid var(--ff-gold);
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 30px;
+        text-align: center;
+    }
+    
+    .expedition-status h2 {
+        border: none;
+        margin-bottom: 10px;
+    }
+    
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+        animation: pulse 2s ease-in-out infinite;
+    }
+    
+    .status-running {
+        background: var(--ff-green);
+        box-shadow: 0 0 10px var(--ff-green);
+    }
+    
+    .status-completed {
+        background: var(--ff-silver);
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.7; transform: scale(1.1); }
+        100% { opacity: 1; transform: scale(1); }
+    }
+    
+    /* Guild cards grid */
+    .guild-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 20px;
+        margin-bottom: 40px;
+    }
+    
+    .guild-card {
+        background: rgba(26, 35, 126, 0.3);
+        border: 2px solid var(--ff-silver);
+        border-radius: 10px;
+        padding: 20px;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .guild-card:hover {
+        border-color: var(--ff-gold);
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(255,215,0,0.3);
+    }
+    
+    .guild-card::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(255,215,0,0.1) 0%, transparent 70%);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    
+    .guild-card:hover::before {
+        opacity: 1;
+    }
+    
+    .guild-name {
+        font-family: 'Cinzel', serif;
+        font-size: 24px;
+        color: var(--ff-gold);
+        margin-bottom: 15px;
+    }
+    
+    .guild-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 15px;
+    }
+    
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        border-bottom: 1px solid rgba(255,215,0,0.2);
+    }
+    
+    .stat-label {
+        color: var(--ff-silver);
+        font-size: 14px;
+    }
+    
+    .stat-value {
+        font-family: 'Press Start 2P', cursive;
+        font-size: 12px;
+        color: var(--text-light);
+    }
+    
+    /* Recent expeditions table */
+    .expedition-row {
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .expedition-row:hover {
+        background: rgba(255,215,0,0.1);
+        transform: translateX(5px);
+    }
+    
+    /* No data message */
+    .no-data {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--ff-silver);
+    }
+    
+    .no-data-icon {
+        font-size: 64px;
+        margin-bottom: 20px;
+        opacity: 0.5;
+    }
+    
+    /* Countdown timer */
+    .countdown {
+        font-family: 'Press Start 2P', cursive;
+        font-size: 16px;
+        color: var(--ff-gold);
+        margin-top: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="hero-section">
+    <h1 class="hero-title">Fantasy Guild Manager</h1>
+    <p class="hero-subtitle">Watch brave guilds explore dangerous dungeons in real-time</p>
+</div>
+
+<!-- Current Expedition Status -->
+{% if current_expedition %}
+<div class="ff-window expedition-status">
+    <h2>
+        <span class="status-indicator {% if current_expedition.status == 'running' %}status-running{% else %}status-completed{% endif %}"></span>
+        Expedition #{{ current_expedition.expedition_number }}
+        {% if current_expedition.status == 'running' %}
+            - IN PROGRESS
+        {% else %}
+            - {{ current_expedition.status|upper }}
+        {% endif %}
+    </h2>
+    <p>Started: {{ current_expedition.start_time }}</p>
+    {% if current_expedition.status == 'completed' and current_expedition.end_time %}
+        <p>Completed: {{ current_expedition.end_time }}</p>
+    {% endif %}
+    <div class="countdown" id="next-expedition-timer"></div>
+</div>
+
+<!-- Participating Guilds -->
+{% if guilds %}
+<div class="ff-window">
+    <h2>Participating Guilds</h2>
+    <div class="guild-grid">
+        {% for guild in guilds %}
+        <div class="guild-card" onclick="window.location.href='/guild/{{ guild.id }}'">
+            <h3 class="guild-name">{{ guild.name }}</h3>
+            {% if guild.motto %}
+                <p style="font-style: italic; color: var(--ff-silver); margin-bottom: 15px;">"{{ guild.motto }}"</p>
+            {% endif %}
+            <div class="guild-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Floors Cleared:</span>
+                    <span class="stat-value">{{ guild.floors_cleared }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Gold Found:</span>
+                    <span class="stat-value">{{ guild.gold_found }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Survivors:</span>
+                    <span class="stat-value {% if guild.survivors == 0 %}status-dead{% elif guild.survivors < 4 %}status-retreated{% else %}status-alive{% endif %}">
+                        {{ guild.survivors }}/4
+                    </span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Status:</span>
+                    <span class="stat-value {% if guild.wiped %}status-dead{% elif guild.retreated %}status-retreated{% else %}status-victorious{% endif %}">
+                        {% if guild.wiped %}
+                            WIPED
+                        {% elif guild.retreated %}
+                            RETREATED
+                        {% else %}
+                            EXPLORING
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            {% if current_expedition.status == 'running' %}
+                <a href="/expedition/{{ current_expedition.id }}" class="ff-button" style="margin-top: 15px; font-size: 10px; padding: 10px 20px;">
+                    WATCH LIVE
+                </a>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% else %}
+<div class="ff-window no-data">
+    <div class="no-data-icon">⚔️</div>
+    <h2>No Active Expedition</h2>
+    <p>The next expedition will begin soon...</p>
+    <div class="countdown" id="next-expedition-timer"></div>
+</div>
+{% endif %}
+
+<!-- Recent Expeditions -->
+{% if recent_expeditions %}
+<div class="ff-window">
+    <h2>Recent Expeditions</h2>
+    <table class="ff-table">
+        <thead>
+            <tr>
+                <th>Expedition</th>
+                <th>Date</th>
+                <th>Guilds</th>
+                <th>Total Gold</th>
+                <th>Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for exp in recent_expeditions %}
+            <tr class="expedition-row" onclick="window.location.href='/expedition/{{ exp.id }}'">
+                <td>#{{ exp.expedition_number }}</td>
+                <td>{{ exp.start_time }}</td>
+                <td>{{ exp.guild_count or 0 }}</td>
+                <td>{{ exp.total_gold or 0 }}</td>
+                <td>
+                    <span class="{% if exp.status == 'completed' %}status-alive{% else %}status-retreated{% endif %}">
+                        {{ exp.status|upper }}
+                    </span>
+                </td>
+                <td>
+                    <a href="/expedition/{{ exp.id }}" class="ff-button" style="font-size: 10px; padding: 8px 16px;">
+                        VIEW REPLAY
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Calculate and display countdown to next expedition
+    function updateCountdown() {
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        const currentSecond = now.getSeconds();
+        
+        // Calculate minutes and seconds until next hour
+        const minutesLeft = 59 - currentMinute;
+        const secondsLeft = 59 - currentSecond;
+        
+        const timerElement = document.getElementById('next-expedition-timer');
+        if (timerElement) {
+            if (minutesLeft === 0 && secondsLeft < 10) {
+                timerElement.textContent = 'EXPEDITION STARTING SOON!';
+                timerElement.style.animation = 'pulse 0.5s ease-in-out infinite';
+            } else {
+                timerElement.textContent = `Next expedition in: ${minutesLeft}:${secondsLeft.toString().padStart(2, '0')}`;
+            }
+        }
+    }
+    
+    // Update countdown every second
+    setInterval(updateCountdown, 1000);
+    updateCountdown(); // Initial call
+    
+    // Auto-refresh page when expedition might have started
+    setInterval(() => {
+        const now = new Date();
+        if (now.getMinutes() === 0 && now.getSeconds() < 5) {
+            window.location.reload();
+        }
+    }, 1000);
+</script>
+{% endblock %}
