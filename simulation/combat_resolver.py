@@ -3,7 +3,7 @@ Combat Resolver for Fantasy Guild Manager simulation.
 
 This module handles turn-based combat between parties and enemies.
 Now uses the full enemy type system with special abilities and boss mechanics.
-Updated to use the new event types for better narrative tracking.
+Updated to use the complete spell system with intelligent AI casting.
 """
 
 import sys
@@ -23,13 +23,17 @@ from models.enemy_types import SpecialAbility, BossType
 from simulation.dungeon_generator import Room, RoomType
 from simulation.debuff_system import DebuffType, Debuff, DebuffManager
 
+# Import the new spell system
+from simulation.spell_resolver import SpellResolver, SpellResult
+from models.spell import SPELLS_BY_NAME
+
 
 class CombatResolver:
     """
     Handles all combat mechanics for the simulation.
 
     This includes enemy creation, turn order, attack resolution,
-    spell casting, special abilities, and boss mechanics.
+    intelligent spell casting, special abilities, and boss mechanics.
     """
 
     def __init__(self, event_emitter: EventEmitter, rng: random.Random):
@@ -43,13 +47,8 @@ class CombatResolver:
         self.event_emitter = event_emitter
         self.rng = rng
 
-        # Basic spell effects (placeholder for full spell system)
-        self.basic_spells = {
-            'heal': {'target': 'ally', 'effect': 'heal', 'power': 8},
-            'harm': {'target': 'enemy', 'effect': 'damage', 'power': 6},
-            'shield': {'target': 'ally', 'effect': 'ac_boost', 'power': 2},
-            'weaken': {'target': 'enemy', 'effect': 'might_penalty', 'power': 2}
-        }
+        # Initialize the new spell resolver
+        self.spell_resolver = SpellResolver(rng)
 
         # Map special abilities to debuff types
         self.ability_to_debuff = {
@@ -104,12 +103,12 @@ class CombatResolver:
         while enemies and party.alive_members() and combat_round < max_rounds:
             combat_round += 1
             self.event_emitter.increment_tick()
-            
-            # Apply status effect damage/effects at start of round
-            self._process_status_effects(party, enemies)
+
+            # Process regeneration and status effects at start of round
+            self._process_round_start_effects(party, enemies)
 
             # Party members act first (player advantage)
-            self._party_combat_turn(party, enemies)
+            self._party_combat_turn(party, enemies, room.floor_number)
 
             # Remove dead enemies
             dead_enemies = [e for e in enemies if not e.is_alive()]
@@ -155,11 +154,20 @@ class CombatResolver:
             )
             return True
 
-    def _process_status_effects(self, party: Party, enemies: List[Enemy]):
-        """Process status effects at start of round"""
-        # Process party member debuffs
+    def _process_round_start_effects(self, party: Party, enemies: List[Enemy]):
+        """Process regeneration and status effects at start of round"""
+        # Process party member effects
         for member in party.members:
-            if member.is_alive:
+            if member.is_alive and member.is_conscious:
+                # Process spell regeneration (Lifebloom effect)
+                regen_healed = member.process_regeneration()
+                if regen_healed > 0:
+                    self.event_emitter.emit(
+                        party.guild_id, party.guild_name, EventType.CHARACTER_HEALED,
+                        f"{member.name} regenerates {regen_healed} HP!",
+                        details={'character': member.name, 'healing': regen_healed, 'regeneration': True}
+                    )
+
                 # Apply poison damage
                 poison_damage = member.debuff_manager.get_poison_damage()
                 if poison_damage > 0:
@@ -233,7 +241,7 @@ class CombatResolver:
                             details={'enemy': enemy.name, 'healing': actual_heal}
                         )
 
-    def _party_combat_turn(self, party: Party, enemies: List[Enemy]):
+    def _party_combat_turn(self, party: Party, enemies: List[Enemy], floor_level: int):
         """Handle all party member actions in combat"""
         for member in party.alive_members():
             if not enemies:  # All enemies dead
@@ -255,11 +263,11 @@ class CombatResolver:
                     self._confused_attack(party, member)
                     continue
 
-            # Choose action based on role and situation
-            if member.role in [CharacterRole.STRIKER, CharacterRole.BURGLAR]:
+            # Choose action based on role and spellcasting ability
+            if member.can_cast_spells() and member.get_available_spells():
+                self._character_cast_spell(party, member, enemies, floor_level)
+            else:
                 self._character_attack(party, member, enemies)
-            else:  # SUPPORT or CONTROLLER
-                self._character_cast_spell(party, member, enemies)
 
     def _character_attack(self, party: Party, attacker: Character, enemies: List[Enemy]):
         """Resolve a character's attack action"""
@@ -315,6 +323,131 @@ class CombatResolver:
                 party.guild_id, party.guild_name, EventType.ATTACK_MISS,
                 f"{attacker.name} misses {target.name} (rolled {total_attack} vs AC {target.get_effective_ac()})",
                 details={'character': attacker.name, 'roll': total_attack, 'target_ac': target.get_effective_ac()}
+            )
+
+    def _character_cast_spell(self, party: Party, caster: Character, enemies: List[Enemy], floor_level: int):
+        """Resolve a character's spell casting action using the new spell system"""
+        # Select best spell for current situation
+        spell_choice = self.spell_resolver.select_spell_for_character(
+            caster, party.members, enemies, floor_level
+        )
+        
+        if not spell_choice:
+            # No suitable spell, fall back to attack
+            self._character_attack(party, caster, enemies)
+            return
+
+        # Get the spell definition
+        spell = SPELLS_BY_NAME.get(spell_choice)
+        if not spell:
+            # Unknown spell, fall back to attack
+            self._character_attack(party, caster, enemies)
+            return
+
+        # Select target for the spell
+        target = self.spell_resolver.select_target_for_spell(
+            spell, caster, party.members, enemies
+        )
+        
+        if not target:
+            # No valid target, fall back to attack
+            self._character_attack(party, caster, enemies)
+            return
+
+        # Calculate enemy level for DC (use floor level as fallback)
+        enemy_level = floor_level
+        if enemies:
+            # Try to get average enemy level, fall back to floor level
+            total_level = 0
+            for enemy in enemies:
+                level = getattr(enemy, 'level', floor_level)
+                # Handle Mock objects or non-integer values
+                if isinstance(level, int):
+                    total_level += level
+                else:
+                    total_level += floor_level
+            enemy_level = total_level // len(enemies)
+
+        # Cast the spell
+        result = self.spell_resolver.cast_spell(
+            caster, spell_choice, target, floor_level, enemy_level
+        )
+
+        # Emit appropriate event based on result
+        if result.result == SpellResult.CRITICAL_SUCCESS:
+            self.event_emitter.emit(
+                party.guild_id, party.guild_name, EventType.SPELL_CAST,
+                f"CRITICAL! {result.description}",
+                details={
+                    'caster': caster.name,
+                    'spell': spell_choice,
+                    'target': result.target,
+                    'result': result.result.value,
+                    'roll': result.roll,
+                    'dc': result.dc,
+                    'damage': result.damage_dealt,
+                    'healing': result.healing_done,
+                    'debuff': result.debuff_applied,
+                    'critical': True
+                },
+                priority='high'
+            )
+        
+        elif result.result == SpellResult.SUCCESS:
+            self.event_emitter.emit(
+                party.guild_id, party.guild_name, EventType.SPELL_CAST,
+                result.description,
+                details={
+                    'caster': caster.name,
+                    'spell': spell_choice,
+                    'target': result.target,
+                    'result': result.result.value,
+                    'roll': result.roll,
+                    'dc': result.dc,
+                    'damage': result.damage_dealt,
+                    'healing': result.healing_done,
+                    'debuff': result.debuff_applied
+                }
+            )
+        
+        elif result.result == SpellResult.CRITICAL_FAILURE:
+            self.event_emitter.emit(
+                party.guild_id, party.guild_name, EventType.SPELL_FAIL,
+                result.description,
+                details={
+                    'character': caster.name,
+                    'spell': spell_choice,
+                    'disabled': True,
+                    'critical_failure': True
+                },
+                priority='high'
+            )
+        
+        elif result.result == SpellResult.FAILURE:
+            self.event_emitter.emit(
+                party.guild_id, party.guild_name, EventType.SPELL_FAIL,
+                result.description,
+                details={
+                    'character': caster.name,
+                    'spell': spell_choice,
+                    'roll': result.roll,
+                    'dc': result.dc
+                }
+            )
+        
+        elif result.result == SpellResult.NO_VALID_TARGET:
+            # Fall back to attack if no valid target found
+            self._character_attack(party, caster, enemies)
+        
+        elif result.result == SpellResult.SPELL_DISABLED:
+            # Spell is disabled, fall back to attack
+            self._character_attack(party, caster, enemies)
+
+        # Apply any additional effects from spell results
+        if result.debuff_applied and hasattr(target, 'debuff_manager'):
+            self.event_emitter.debuff_applied(
+                party.guild_id, party.guild_name,
+                result.target, result.debuff_applied, caster.name, result.debuff_duration
             )
 
     def _enemy_combat_turn(self, party: Party, enemies: List[Enemy]):
@@ -428,58 +561,6 @@ class CombatResolver:
                     party.guild_id, party.guild_name, target.name
                 )
 
-    def _character_cast_spell(self, party: Party, caster: Character, enemies: List[Enemy]):
-        """Resolve a character's spell casting action"""
-        # Check if stunned
-        if caster.debuff_manager.is_stunned():
-            return  # Already handled in main turn
-
-        # Check available spells
-        if caster.spell_slots == 0 or len(caster.disabled_spells) >= caster.spell_slots:
-            # No spells available, fall back to basic attack
-            self._character_attack(party, caster, enemies)
-            return
-
-        # Choose spell based on situation (simple AI for now)
-        spell_name = self._choose_spell_for_situation(party, enemies)
-        spell = self.basic_spells.get(spell_name)
-
-        if not spell:
-            self._character_attack(party, caster, enemies)
-            return
-
-        # Calculate spell modifiers
-        spell_modifier = caster.get_wit_modifier()
-        spell_modifier += caster.debuff_manager.get_stat_modifier('wit')
-
-        # Roll spell: d20 + wit vs DC (10 + floor level)
-        spell_roll = self.rng.randint(1, 20)
-        total_roll = spell_roll + spell_modifier
-        spell_dc = 10 + max(1, len(enemies))  # Simple DC based on enemy count
-
-        if spell_roll == 1:
-            # Critical failure - spell disabled for rest of expedition
-            caster.disable_spell(spell_name)
-            self.event_emitter.emit(
-                party.guild_id, party.guild_name, EventType.SPELL_FAIL,
-                f"{caster.name} critically fails casting {spell_name}! Spell disabled for expedition!",
-                details={'character': caster.name, 'spell': spell_name, 'disabled': True},
-                priority='high'
-            )
-
-        elif spell_roll == 20 or total_roll >= spell_dc:
-            # Spell succeeds
-            success_type = "critical" if spell_roll == 20 else "normal"
-            self._apply_spell_effect(party, caster, spell, spell_name, enemies, success_type)
-
-        else:
-            # Spell fails (but not critically)
-            self.event_emitter.emit(
-                party.guild_id, party.guild_name, EventType.SPELL_FAIL,
-                f"{caster.name} fails to cast {spell_name} (rolled {total_roll} vs DC {spell_dc})",
-                details={'character': caster.name, 'spell': spell_name, 'roll': total_roll, 'dc': spell_dc}
-            )
-
     # === Helper Methods ===
 
     def _calculate_normal_damage(self, character: Character) -> int:
@@ -507,49 +588,4 @@ class CombatResolver:
 
         return max(1, base_damage)
 
-    def _choose_spell_for_situation(self, party: Party, enemies: List[Enemy]) -> str:
-        """Simple AI to choose appropriate spell"""
-        # Check if anyone needs healing
-        injured_members = [m for m in party.alive_members() if m.current_hp < m.max_hp * 0.7]
 
-        if injured_members:
-            return 'heal'
-        elif len(enemies) > 2:
-            return 'harm'  # Damage when outnumbered
-        else:
-            return 'harm'  # Default to damage
-
-    def _apply_spell_effect(self, party: Party, caster: Character, spell: Dict,
-                           spell_name: str, enemies: List[Enemy], success_type: str = "normal"):
-        """Apply the effect of a successfully cast spell"""
-        effect = spell['effect']
-        power = spell['power']
-
-        # Critical successes are more powerful
-        if success_type == "critical":
-            power = int(power * 1.5)
-
-        if effect == 'heal':
-            # Heal injured party member
-            injured = [m for m in party.alive_members() if m.current_hp < m.max_hp]
-            if injured:
-                target = self.rng.choice(injured)
-                healed = target.heal(power)
-                crit_text = " (CRITICAL!)" if success_type == "critical" else ""
-                self.event_emitter.emit(
-                    party.guild_id, party.guild_name, EventType.CHARACTER_HEALED,
-                    f"{caster.name} heals {target.name} for {healed} HP{crit_text}!",
-                    details={'caster': caster.name, 'target': target.name, 'healing': healed, 'critical': success_type == "critical"}
-                )
-
-        elif effect == 'damage':
-            # Damage random enemy
-            if enemies:
-                target = self.rng.choice(enemies)
-                target.take_damage(power)
-                crit_text = " (CRITICAL!)" if success_type == "critical" else ""
-                self.event_emitter.emit(
-                    party.guild_id, party.guild_name, EventType.SPELL_CAST,
-                    f"{caster.name} casts {spell_name} on {target.name} for {power} damage{crit_text}!",
-                    details={'caster': caster.name, 'spell': spell_name, 'target': target.name, 'damage': power, 'critical': success_type == "critical"}
-                )

@@ -5,7 +5,7 @@ Characters are members of guilds who go on automated expeditions.
 This is the foundation of our simulation - every action revolves around
 these characters and their stats.
 
-Now includes full debuff system integration for status effects.
+Now includes full spell system integration with debuff system.
 """
 
 import sys
@@ -13,7 +13,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
@@ -48,7 +48,7 @@ class Character:
     - luck: Trap detection, treasure finding, and critical hits
 
     During expeditions, characters can take damage, be healed,
-    or have their spells disabled by critical failures.
+    cast spells, or have their spells disabled by critical failures.
     """
 
     # === Identity ===
@@ -73,26 +73,35 @@ class Character:
     death_test_failures: int = 0    # How many death tests have been failed
 
     # === Spell System ===
-    spell_slots: int = 0            # Number of spells this character can know
+    known_spells: List[str] = field(default_factory=list)  # Spell names character knows
+    disabled_spells: List[str] = field(default_factory=list)  # Spells disabled by critical failures
+
+    # === Equipment System (for future expansion) ===
+    equipped_weapon: Optional[str] = None
+    equipped_armor: Optional[str] = None
+    equipped_accessory1: Optional[str] = None
+    equipped_accessory2: Optional[str] = None
+
+    # === Spell Effects (temporary buffs during expedition) ===
+    damage_shield: int = 0          # Absorbs damage from Ward of Vitality
+    has_death_protection: bool = False  # Echo of Hope effect
+    regeneration_rounds: int = 0    # Lifebloom effect
 
     # === Expedition Tracking ===
-    disabled_spells: List[str] = None  # Spells disabled by critical failures
     times_downed: int = 0  # How many times character has been downed (affects morale)
 
     def __post_init__(self):
-        """Initialize calculated values and mutable defaults"""
-        if self.disabled_spells is None:
-            self.disabled_spells = []
-
+        """Initialize calculated values and spell knowledge"""
         # Calculate max HP based on role and grit
         self.max_hp = self._calculate_max_hp()
         self.current_hp = self.max_hp
-
-        # Calculate spell slots based on role and wit
-        self.spell_slots = self._calculate_spell_slots()
         
         # Initialize debuff manager for tracking status effects
         self.debuff_manager = DebuffManager()
+
+        # Generate spell knowledge if not provided
+        if not self.known_spells:
+            self.known_spells = self._generate_starting_spells()
 
     def _calculate_max_hp(self) -> int:
         """Calculate maximum HP based on role and grit stat"""
@@ -110,64 +119,54 @@ class Character:
 
         return base_hp + hp_roll
 
-    def _calculate_spell_slots(self) -> int:
-        """Calculate number of spell slots based on role and wit"""
-        if self.role in [CharacterRole.SUPPORT, CharacterRole.CONTROLLER]:
-            # Casters get 1 spell slot per 3 wit (rounded down)
-            return self.wit // 3
-        else:
-            # Strikers and Burglars don't get spells
-            return 0
+    def _generate_starting_spells(self) -> List[str]:
+        """Generate starting spells for caster characters"""
+        # Only casters get spells
+        if self.role not in [CharacterRole.SUPPORT, CharacterRole.CONTROLLER]:
+            return []
+
+        # Create consistent random generator based on character identity
+        # This ensures same character always gets same spells
+        seed = hash(self.name + self.role.value + str(self.guild_id)) % (2**31)
+        rng = random.Random(seed)
+
+        # Import spell functions (lazy import to avoid circular dependencies)
+        try:
+            from models.spell import get_default_spells_for_role, generate_random_spells_for_role
+            
+            # Get default spell for role
+            default_spells = get_default_spells_for_role(self.role.value)
+            
+            # Generate 1d4 additional random spells
+            additional_count = rng.randint(1, 4)
+            random_spells = generate_random_spells_for_role(self.role.value, additional_count, rng)
+            
+            return default_spells + random_spells
+        except ImportError:
+            # Fallback if spell system not available
+            return []
 
     # === STAT MODIFIERS ===
     # Universal 3:1 scaling - every 3 points of stat = +1 modifier
 
     def get_might_modifier(self) -> int:
-        """
-        Calculate might modifier for attack rolls and damage.
-        
-        Returns:
-            +1 for every 3 points of might
-        """
+        """Calculate might modifier for attack rolls and damage."""
         return self.might // 3
 
     def get_grit_modifier(self) -> int:
-        """
-        Calculate grit modifier for AC, initiative, and defensive rolls.
-        
-        Returns:
-            +1 for every 3 points of grit
-        """
+        """Calculate grit modifier for AC, initiative, and defensive rolls."""
         return self.grit // 3
 
     def get_wit_modifier(self) -> int:
-        """
-        Calculate wit modifier for spell attack rolls and spell DCs.
-        
-        Returns:
-            +1 for every 3 points of wit
-        """
+        """Calculate wit modifier for spell attack rolls and spell DCs."""
         return self.wit // 3
 
     def get_luck_modifier(self) -> int:
-        """
-        Calculate luck modifier for trap detection, treasure finding, and crits.
-        
-        Returns:
-            +1 for every 3 points of luck
-        """
+        """Calculate luck modifier for trap detection, treasure finding, and crits."""
         return self.luck // 3
 
     def get_stat_modifier(self, stat_name: str) -> int:
-        """
-        Get modifier for any stat by name.
-        
-        Args:
-            stat_name: One of 'might', 'grit', 'wit', 'luck'
-            
-        Returns:
-            The modifier value (+1 per 3 stat points)
-        """
+        """Get modifier for any stat by name."""
         if stat_name == 'might':
             return self.get_might_modifier()
         elif stat_name == 'grit':
@@ -179,18 +178,74 @@ class Character:
         else:
             return 0
 
+    # === SPELL SYSTEM ===
+
+    def can_cast_spells(self) -> bool:
+        """Check if this character can cast spells"""
+        return self.role in [CharacterRole.SUPPORT, CharacterRole.CONTROLLER]
+
+    def get_available_spells(self) -> List[str]:
+        """Get spells that can currently be cast (not disabled)"""
+        if not self.can_cast_spells() or not self.is_alive or not self.is_conscious:
+            return []
+        
+        return [spell for spell in self.known_spells if spell not in self.disabled_spells]
+
+    def has_spell(self, spell_name: str) -> bool:
+        """Check if character knows a specific spell"""
+        return spell_name in self.known_spells
+
+    def can_cast_spell(self, spell_name: str) -> bool:
+        """Check if character can currently cast a specific spell"""
+        return (self.is_alive and 
+                self.is_conscious and 
+                spell_name in self.known_spells and 
+                spell_name not in self.disabled_spells)
+
+    def disable_spell(self, spell_name: str):
+        """Disable a spell for the rest of the expedition (critical failure)"""
+        if spell_name in self.known_spells and spell_name not in self.disabled_spells:
+            self.disabled_spells.append(spell_name)
+
+    def get_spell_count(self) -> tuple[int, int]:
+        """Get (available, total) spell count"""
+        if not self.can_cast_spells():
+            return (0, 0)
+        
+        total = len(self.known_spells)
+        available = len(self.get_available_spells())
+        return (available, total)
+
+    # === SPELL EFFECTS ===
+
+    def apply_damage_shield(self, amount: int):
+        """Apply damage shield effect from Ward of Vitality"""
+        self.damage_shield += amount
+
+    def apply_death_protection(self):
+        """Apply death protection from Echo of Hope"""
+        self.has_death_protection = True
+
+    def apply_regeneration(self, rounds: int):
+        """Apply regeneration effect from Lifebloom"""
+        self.regeneration_rounds = rounds
+
+    def process_regeneration(self) -> int:
+        """Process regeneration at start of round, returns HP healed"""
+        if self.regeneration_rounds > 0 and self.is_alive and self.is_conscious:
+            healed = self.heal(1)
+            self.regeneration_rounds -= 1
+            return healed
+        return 0
+
     # === DAMAGE AND HEALING ===
 
     def take_damage(self, damage: int) -> bool:
         """
-        Apply damage to character and handle death testing.
-
-        When a character reaches 0 HP, they become unconscious and must
-        make death tests. They need to succeed 2 out of 3 rolls (>10 on d20)
-        to survive. Failure means permanent death.
+        Apply damage to character, accounting for damage shield and death protection.
 
         Args:
-            damage: Amount of damage to take (cannot be negative)
+            damage: Amount of damage to take
 
         Returns:
             True if character was just downed (hp reached 0)
@@ -198,7 +253,20 @@ class Character:
         if damage < 0:
             damage = 0
 
+        # Apply damage shield first
+        if self.damage_shield > 0:
+            shield_absorbed = min(self.damage_shield, damage)
+            self.damage_shield -= shield_absorbed
+            damage -= shield_absorbed
+
+        # Apply remaining damage to HP
         self.current_hp = max(0, self.current_hp - damage)
+
+        # Check for death protection
+        if self.current_hp <= 0 and self.has_death_protection:
+            self.current_hp = 1  # Stay at 1 HP
+            self.has_death_protection = False  # Protection used up
+            return False
 
         # Check if character was just downed
         if self.current_hp <= 0 and self.is_conscious:
@@ -217,11 +285,7 @@ class Character:
     def _death_test(self) -> bool:
         """
         Perform death test when character is downed.
-
         Roll 3d20, need 2+ rolls above 10 to survive.
-
-        Returns:
-            True if character survives, False if they die
         """
         successes = 0
         rolls = []
@@ -237,22 +301,12 @@ class Character:
         if not survived:
             self.death_test_failures += 1
 
-        # Note: In a real implementation, we'd emit an event here
-        # showing the death test results for dramatic tension
-
         return survived
 
     def heal(self, amount: int) -> int:
         """
         Heal character (cannot exceed max HP).
-
-        This can revive unconscious characters but cannot bring back the dead.
-
-        Args:
-            amount: Amount to heal (cannot be negative)
-
-        Returns:
-            Actual amount healed
+        Can revive unconscious characters but not the dead.
         """
         if not self.is_alive:
             return 0  # Cannot heal the dead
@@ -270,55 +324,46 @@ class Character:
         return self.current_hp - old_hp
 
     def get_ac(self) -> int:
-        """
-        Calculate character's Armor Class.
-
-        AC = 10 + grit modifier (representing defensive training and toughness)
-        """
+        """Calculate character's Armor Class."""
         return 10 + self.get_grit_modifier()
 
     def get_stat(self, stat_name: str) -> int:
-        """
-        Get a raw stat value by name.
-
-        Useful for generic stat checks in the simulation engine.
-
-        Args:
-            stat_name: One of 'might', 'grit', 'wit', 'luck'
-
-        Returns:
-            The raw stat value, or 0 if stat doesn't exist
-        """
+        """Get a raw stat value by name."""
         return getattr(self, stat_name, 0)
-
-    def disable_spell(self, spell_name: str):
-        """
-        Disable a spell for the rest of the expedition.
-
-        Called when a character rolls a critical failure (natural 1)
-        while casting a spell.
-        """
-        if spell_name not in self.disabled_spells:
-            self.disabled_spells.append(spell_name)
 
     def reset_for_expedition(self):
         """
         Reset character state for a new expedition.
-
-        Called between expeditions to restore HP and potentially
-        recover disabled spells (based on recovery rolls).
-        Note: times_downed persists as psychological trauma.
-        Dead characters cannot be reset.
+        Called between expeditions to restore HP and clear temporary effects.
         """
         if not self.is_alive:
             return  # Cannot reset dead characters
 
         self.current_hp = self.max_hp
         self.is_conscious = True
+        
+        # Clear spell effects
+        self.damage_shield = 0
+        self.has_death_protection = False
+        self.regeneration_rounds = 0
+        
         # Clear all debuffs between expeditions
         self.debuff_manager.clear_all_debuffs()
-        # Note: disabled_spells persist and require recovery rolls
-        # Note: times_downed persists between expeditions
+        
+        # Note: disabled_spells and times_downed persist between expeditions
+
+    def get_spell_summary(self) -> str:
+        """Get a summary of spell status for display"""
+        if not self.can_cast_spells():
+            return "No spells"
+
+        available, total = self.get_spell_count()
+        disabled = len(self.disabled_spells)
+        
+        if disabled > 0:
+            return f"{available}/{total} spells ({disabled} disabled)"
+        else:
+            return f"{total} spells available"
 
     def __str__(self):
         """String representation for logging and debugging"""
@@ -327,18 +372,28 @@ class Character:
 
         consciousness = "Conscious" if self.is_conscious else "Unconscious"
 
-        # Show available/total spells if character has spell slots
-        if self.spell_slots > 0:
-            disabled_count = len(self.disabled_spells)
-            available_spells = self.spell_slots - disabled_count
-            spells_info = f", {available_spells}/{self.spell_slots} spells"
-        else:
-            spells_info = ""
+        # Show spell info for casters
+        spell_info = ""
+        if self.can_cast_spells():
+            available, total = self.get_spell_count()
+            spell_info = f", {available}/{total} spells"
+
+        # Show spell effects if any
+        effects = []
+        if self.damage_shield > 0:
+            effects.append(f"Shield:{self.damage_shield}")
+        if self.has_death_protection:
+            effects.append("Protected")
+        if self.regeneration_rounds > 0:
+            effects.append(f"Regen:{self.regeneration_rounds}")
+        
+        effects_info = f" [{', '.join(effects)}]" if effects else ""
             
         # Show active debuffs if any
         debuffs_info = ""
         if self.debuff_manager.get_active_debuffs():
-            debuffs_info = f" [{self.debuff_manager}]"
+            debuffs_info = f" Debuffs:[{self.debuff_manager}]"
 
-        return f"{self.name} ({self.role.value}) HP: {self.current_hp}/{self.max_hp} [{consciousness}]{spells_info}{debuffs_info}"
+        return f"{self.name} ({self.role.value}) HP:{self.current_hp}/{self.max_hp} [{consciousness}]{spell_info}{effects_info}{debuffs_info}"
+
 
